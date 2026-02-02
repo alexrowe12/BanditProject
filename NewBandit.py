@@ -111,11 +111,13 @@ class CategoricalArm:
         alpha_sum = np.sum(alpha)
         k = len(alpha)
 
-        # Dirichlet entropy formula
+        # Correct Dirichlet entropy formula:
+        # H = ln(B(α)) + (α₀ - K)·ψ(α₀) - Σ(αᵢ - 1)·ψ(αᵢ)
+        # where ln(B(α)) = Σ gammaln(αᵢ) - gammaln(α₀)
         entropy = (
-            gammaln(alpha_sum) - np.sum(gammaln(alpha))
-            - (k - alpha_sum) * digamma(alpha_sum)
-            + np.sum((alpha - 1) * digamma(alpha))
+            np.sum(gammaln(alpha)) - gammaln(alpha_sum)
+            + (alpha_sum - k) * digamma(alpha_sum)
+            - np.sum((alpha - 1) * digamma(alpha))
         )
         return entropy
 
@@ -126,6 +128,7 @@ class CategoricalArm:
         """
         alpha = self.alpha
         alpha_sum = np.sum(alpha)
+        k = self.num_categories
 
         # Current entropy
         current_entropy = self.dirichlet_entropy()
@@ -133,7 +136,7 @@ class CategoricalArm:
         # Expected entropy after one observation
         # For each possible reward, compute new entropy and weight by probability
         expected_entropy = 0.0
-        for reward in range(self.num_categories):
+        for reward in range(k):
             # Probability of this reward under current belief
             p_reward = alpha[reward] / alpha_sum
 
@@ -142,11 +145,11 @@ class CategoricalArm:
             new_alpha[reward] += 1
             new_alpha_sum = alpha_sum + 1
 
-            # Entropy of updated Dirichlet
+            # Entropy of updated Dirichlet (correct formula)
             new_entropy = (
-                gammaln(new_alpha_sum) - np.sum(gammaln(new_alpha))
-                - (self.num_categories - new_alpha_sum) * digamma(new_alpha_sum)
-                + np.sum((new_alpha - 1) * digamma(new_alpha))
+                np.sum(gammaln(new_alpha)) - gammaln(new_alpha_sum)
+                + (new_alpha_sum - k) * digamma(new_alpha_sum)
+                - np.sum((new_alpha - 1) * digamma(new_alpha))
             )
 
             expected_entropy += p_reward * new_entropy
@@ -283,6 +286,10 @@ class OptimalBanditGame:
         # Information gain from pulling this arm
         info_gain = self.arms[arm].information_gain()
 
+        # Safety check: info_gain should be positive
+        # (numerical issues with digamma approximation can cause problems)
+        info_gain = max(info_gain, 1e-6)
+
         # Information ratio: regret^2 / info_gain
         # Lower is better (low regret per unit of information)
         epsilon = 1e-10
@@ -300,7 +307,7 @@ class OptimalBanditGame:
         temperature = self.get_temperature()
         arm_details = []
 
-        best_arm = None
+        best_arms = []  # Track all arms with best score for tie-breaking
         best_score = float('inf')
 
         for arm in range(self.num_arms):
@@ -322,14 +329,23 @@ class OptimalBanditGame:
             adjusted_ev = ev + social_boost
 
             # Temperature-adjusted score
-            # At high temp: favor information gain (exploration)
-            # At low temp: favor low regret (exploitation)
-            if temperature > 0.5:
-                # Early game: weight info gain more
-                score = ratio / temperature
+            # Key insight: when regret is near 0, ratio is ~0 for all arms
+            # In that case, prefer arms with HIGH information gain (exploration)
+            #
+            # Score formula: ratio - (exploration_weight * info_gain)
+            # - Lower score is better
+            # - Low ratio (low regret per info) = good
+            # - High info_gain with exploration bonus = lower score = good
+
+            exploration_weight = temperature * 0.5  # Decays as game progresses
+
+            if regret < 0.01:
+                # Near-zero regret: pure exploration mode
+                # Prefer arms we know less about (higher info_gain)
+                score = -info_gain * exploration_weight
             else:
-                # Late game: just pick highest EV with small info bonus
-                score = -adjusted_ev + 0.1 * ratio
+                # Normal IDS: balance regret vs information
+                score = ratio - (exploration_weight * info_gain)
 
             arm_details.append({
                 'arm': arm,
@@ -341,9 +357,14 @@ class OptimalBanditGame:
                 'score': score
             })
 
-            if score < best_score:
+            if score < best_score - 1e-9:  # Strictly better
                 best_score = score
-                best_arm = arm
+                best_arms = [arm]
+            elif abs(score - best_score) < 1e-9:  # Tie
+                best_arms.append(arm)
+
+        # Random tie-breaking
+        best_arm = np.random.choice(best_arms) if best_arms else 0
 
         return best_arm, arm_details
 
