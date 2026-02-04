@@ -441,7 +441,7 @@ def get_team_choices_input(prompt: str, allow_undo: bool = True) -> str:
 
 
 def parse_team_choices(input_str: str, num_arms: int) -> List[Optional[int]]:
-    """Parse comma-separated team choices. Use 'x' for unknown."""
+    """Parse comma-separated team choices (1-4). Use 'x' for unknown."""
     choices = []
     for part in input_str.split(','):
         part = part.strip().lower()
@@ -449,7 +449,7 @@ def parse_team_choices(input_str: str, num_arms: int) -> List[Optional[int]]:
             choices.append(None)
         else:
             try:
-                arm = int(part)
+                arm = int(part) - 1  # Convert 1-4 to 0-3
                 if 0 <= arm < num_arms:
                     choices.append(arm)
                 else:
@@ -465,15 +465,15 @@ def parse_team_choices(input_str: str, num_arms: int) -> List[Optional[int]]:
 
 def print_recommendation(recommended: int, arm_details: List[dict], forbidden: int, verbose: bool):
     """Print the IDS recommendation."""
-    print(f"\n>>> RECOMMENDATION: Pull ARM {recommended}")
+    print(f"\n>>> RECOMMENDATION: Pull ARM {recommended + 1}")  # Display as 1-4
 
     # Compact view
     parts = []
     for d in arm_details:
         if d['forbidden']:
-            parts.append(f"Arm {d['arm']}: FORBIDDEN")
+            parts.append(f"Arm {d['arm'] + 1}: FORBIDDEN")
         else:
-            parts.append(f"Arm {d['arm']}: E[V]={d['ev']:.2f}")
+            parts.append(f"Arm {d['arm'] + 1}: E[V]={d['ev']:.2f}")
     print("    " + "  |  ".join(parts))
 
     # Verbose: show IDS details
@@ -483,9 +483,9 @@ def print_recommendation(recommended: int, arm_details: List[dict], forbidden: i
         print("    " + "-" * 51)
         for d in arm_details:
             if d['forbidden']:
-                print(f"    {d['arm']:<5} {'--':<8} {'--':<10} {'--':<8} {'--':<10} FORBIDDEN")
+                print(f"    {d['arm'] + 1:<5} {'--':<8} {'--':<10} {'--':<8} {'--':<10} FORBIDDEN")
             else:
-                print(f"    {d['arm']:<5} {d['ev']:<8.3f} {d['info_gain']:<10.4f} "
+                print(f"    {d['arm'] + 1:<5} {d['ev']:<8.3f} {d['info_gain']:<10.4f} "
                       f"{d['regret']:<8.3f} {d['ratio']:<10.4f} {d['score']:<10.4f}")
 
 
@@ -494,7 +494,7 @@ def print_beliefs(game: OptimalBanditGame):
     print("\nCurrent beliefs:")
     stats = game.get_arm_stats()
     for s in stats:
-        print(f"  Arm {s['arm']}: E[V]={s['ev']:.2f} "
+        print(f"  Arm {s['arm'] + 1}: E[V]={s['ev']:.2f} "
               f"(pulls={s['pulls']}, var={s['variance']:.2f}, social={s['social']:.1f})")
 
 
@@ -510,17 +510,17 @@ def print_game_summary(game: OptimalBanditGame):
     print("\nFinal Arm Statistics:")
     stats = game.get_arm_stats()
     for s in stats:
-        print(f"  Arm {s['arm']}: Pulled {s['pulls']}x, "
+        print(f"  Arm {s['arm'] + 1}: Pulled {s['pulls']}x, "
               f"Final E[V]={s['ev']:.2f}, Social={s['social']:.1f}")
 
     # Consensus detection
     consensus = game.social_model.get_consensus_arm()
     if consensus is not None:
-        print(f"\nOther teams converged on: Arm {consensus}")
+        print(f"\nOther teams converged on: Arm {consensus + 1}")
 
     print("\nRound History:")
     for i, (arm, reward, forbidden) in enumerate(game.round_history, 1):
-        print(f"  Round {i:2d}: Pulled Arm {arm}, Got {reward:2d} (Arm {forbidden} forbidden)")
+        print(f"  Round {i:2d}: Pulled Arm {arm + 1}, Got {reward:2d} (Arm {forbidden + 1} forbidden)")
 
     print("\n" + "=" * 55)
 
@@ -555,7 +555,7 @@ def main():
     print("INFORMATION-DIRECTED SAMPLING BANDIT STRATEGY")
     print("=" * 55)
     print(f"\nConfiguration:")
-    print(f"  Arms: {args.num_arms} (numbered 0-{args.num_arms - 1})")
+    print(f"  Arms: {args.num_arms} (numbered 1-{args.num_arms})")
     print(f"  Rounds: {args.num_rounds}")
     print(f"  Rewards: 0-{args.max_reward}")
     print(f"  Social weight: {args.social_weight}, decay: {args.social_decay}")
@@ -563,7 +563,7 @@ def main():
     print("\nInstructions:")
     print("  - Type 'z' at any prompt to UNDO and go back one step")
     print("  - From Round 2+, enter other teams' previous choices")
-    print("  - Use 'x' for unknown team choices (e.g., 1,x,0,3)")
+    print("  - Use 'x' for unknown team choices (e.g., 1,x,2,3)")
     print("\n" + "=" * 55)
 
     # Main loop
@@ -586,7 +586,7 @@ def main():
                     print(f"\n[Recording Round {round_num - 1} results from other teams]")
                     team_input = get_team_choices_input(
                         f"Other teams' choices from Round {round_num - 1} "
-                        f"(e.g., 1,0,1,3 or x): "
+                        f"(e.g., 1,2,1,3 or x): "
                     )
                     if team_input:
                         choices = parse_team_choices(team_input, args.num_arms)
@@ -597,9 +597,9 @@ def main():
                 # Step 1: Forbidden arm
                 if step == 1:
                     forbidden = get_valid_input(
-                        f"\nForbidden arm this round (0-{args.num_arms - 1}): ",
-                        range(args.num_arms)
-                    )
+                        f"\nForbidden arm this round (1-{args.num_arms}): ",
+                        range(1, args.num_arms + 1)
+                    ) - 1  # Convert 1-4 to 0-3
 
                     # Get IDS recommendation
                     recommended, arm_details = game.recommend_ids(forbidden)
@@ -610,11 +610,11 @@ def main():
                 # Step 2: Arm pulled
                 if step == 2:
                     actual_arm = get_valid_input(
-                        f"\nWhat arm did you pull? (0-{args.num_arms - 1}): ",
-                        range(args.num_arms)
-                    )
+                        f"\nWhat arm did you pull? (1-{args.num_arms}): ",
+                        range(1, args.num_arms + 1)
+                    ) - 1  # Convert 1-4 to 0-3
                     if actual_arm == forbidden:
-                        print(f"  Warning: Arm {actual_arm} was forbidden!")
+                        print(f"  Warning: Arm {actual_arm + 1} was forbidden!")
                     step = 3
                     continue
 
